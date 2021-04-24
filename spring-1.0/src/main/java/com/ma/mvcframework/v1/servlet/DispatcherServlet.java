@@ -1,5 +1,9 @@
 package com.ma.mvcframework.v1.servlet;
 
+import com.ma.mvcframework.annotation.Autowired;
+import com.ma.mvcframework.annotation.Controller;
+import com.ma.mvcframework.annotation.Service;
+
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -8,6 +12,8 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.net.URL;
 import java.util.*;
 
@@ -78,18 +84,85 @@ public class DispatcherServlet extends HttpServlet {
     }
 
     /**
+     * 4、完成依赖注入
+     */
+    private void doAutowired() {
+        if (ioc.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : ioc.entrySet()) {
+            Class<?> clazz = entry.getValue().getClass();
+            // 把所有的包括private/protected/default/public 修饰字段都取出来
+            Field[] fields = clazz.getDeclaredFields();
+            for (Field f : fields) {
+                if (!f.isAnnotationPresent(Autowired.class)) {
+                    continue;
+                }
+                Autowired autowired = f.getAnnotation(Autowired.class);
+                String beanName = autowired.value();
+                if ("".equals(beanName.trim())) {
+                    // field.getType() => com.ma.demo.service.DemoService
+                    // field.getDeclaringClass() => com.ma.demo.controller.DemoController
+                    // field.getClass() => java.lang.reflect.Field
+                    beanName = f.getType().getSimpleName();
+                }
+                f.setAccessible(true);
+                try {
+                    f.set(entry.getValue(), ioc.get(beanName));
+                } catch (IllegalAccessException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    /**
      * 3、初始化IOC容器，将组件注解类实例化并加入IoC容器
      * 组件注解：@Component及其子注解@Service、@Controller、@Repository...
      */
     private void doInstance() {
+        if (classNames.isEmpty()) {
+            return;
+        }
 
-    }
+        for (String className : classNames) {
+            try {
+                // 必须加<?>，否则clazz.getAnnotation()返回的是Annotation对象
+                Class<?> clazz = Class.forName(className);
+                // clazz.isAnnotationPresent()判断该类上是否加了指定注解
+                if (clazz.isAnnotationPresent(Controller.class)) {
+                    // 默认类名首字母小写  注：clazz.getSimpleName()获取类名；clazz.getName()获取类的全限定名
+                    String beanName = this.toLowerFirstCase(clazz.getSimpleName());
+                    // key=>类名；value=>实例
+                    ioc.put(beanName, clazz.newInstance());
+                } else if (clazz.isAnnotationPresent(Service.class)) {
+                    // 获取@Service注解的value属性
+                    Service service = clazz.getAnnotation(Service.class);
+                    System.out.println(service);
+                    System.out.println(service.annotationType());
+                    // 1、自定义的beanName
+                    String beanName = service.value();
 
-    /**
-     * 4、完成依赖注入
-     */
-    private void doAutowired() {
+                    // 2、默认类名首字母小写
+                    if ("".equals(beanName.trim())) {
+                        beanName = toLowerFirstCase(clazz.getSimpleName());
+                    }
+                    ioc.put(beanName, clazz.newInstance());
 
+                    // 3、一个接口不允许有多个别名相同的实现类
+                    for (Class<?> i : clazz.getInterfaces()) {
+                        if (ioc.containsKey(toLowerFirstCase(i.getSimpleName()))) {
+                            throw new Exception("The \"" + i.getName() + "\" is exists, please use alies");
+                        }
+                        ioc.put(toLowerFirstCase(clazz.getSimpleName()), clazz.newInstance());
+                    }
+                } else {
+                    continue;
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     /**
@@ -144,6 +217,21 @@ public class DispatcherServlet extends HttpServlet {
                 e.printStackTrace();
             }
         }
+    }
+
+    /**
+     * 首字母转小写
+     *
+     * @param simpleName 类名
+     * @return 首字母小写的类名
+     */
+    private String toLowerFirstCase(String simpleName) {
+        if (Character.isLowerCase(simpleName.charAt(0))) {
+            return simpleName;
+        }
+        char[] charArray = simpleName.toCharArray();
+        charArray[0] += 32;
+        return new String(charArray);
     }
 
 }
