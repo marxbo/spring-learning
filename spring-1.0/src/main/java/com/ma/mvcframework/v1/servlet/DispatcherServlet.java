@@ -1,8 +1,6 @@
 package com.ma.mvcframework.v1.servlet;
 
-import com.ma.mvcframework.annotation.Autowired;
-import com.ma.mvcframework.annotation.Controller;
-import com.ma.mvcframework.annotation.Service;
+import com.ma.mvcframework.annotation.*;
 
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
@@ -12,6 +10,7 @@ import javax.servlet.http.HttpServletResponse;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -31,7 +30,7 @@ public class DispatcherServlet extends HttpServlet {
     private Properties contextConfig = new Properties();
 
     /**
-     * 扫描包下的所有类全限定名
+     * 扫描包下的所有类全限定名（享元模式，缓存）
      */
     private List<String> classNames = new ArrayList<>();
 
@@ -40,6 +39,11 @@ public class DispatcherServlet extends HttpServlet {
      */
     private Map<String, Object> ioc = new HashMap<>();
 
+    /**
+     * URL和Method的映射关系
+     */
+    private Map<String, Method> handlerMapping = new HashMap<>();
+
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         this.doPost(req, resp);
@@ -47,16 +51,76 @@ public class DispatcherServlet extends HttpServlet {
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
-        super.doPost(req, resp);
+        try {
+            // 6、调用、运行阶段（委派模式）
+            this.doDispatch(req,resp);
+        } catch (Exception e) {
+            e.printStackTrace();
+            resp.getWriter().write("500 Exection, Detail : " + Arrays.toString(e.getStackTrace()));
+        }
+    }
+
+    /**
+     * 6、调用、运行阶段
+     *
+     * @param req 请求
+     * @param resp 响应
+     */
+    private void doDispatch(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+        // 绝对路径
+        String url = req.getRequestURI();
+        // 去掉上下文的相对路径
+        String contextPath = req.getContextPath();
+        url = url.replaceAll(contextPath, "").replaceAll("/+", "/");
+
+        if (!handlerMapping.containsKey(url)) {
+            throw new Exception("404 Not Found!!");
+        }
+        Method method = this.handlerMapping.get(url);
+
+        // 形参列表
+        Class<?>[] paramTypes = method.getParameterTypes();
+        // 实参列表
+        Object[] paramValues = new Object[paramTypes.length];
+        // 传参列表
+        Map<String, String[]> paramMap = req.getParameterMap();
+        // 形参注解（一个参数可以有多个注解）
+        Annotation[][] pas = method.getParameterAnnotations();
+        for (int i = 0; i < paramTypes.length; i++) {
+            Class<?> clazz = paramTypes[i];
+            // 判断Class类对象是否相同用==
+            if (clazz == HttpServletRequest.class) {
+                paramValues[i] = req;
+            } else if (clazz == HttpServletResponse.class) {
+                paramValues[i] = resp;
+            } else if (clazz == String.class) {
+                for (Annotation paramAnnotation : pas[i]) {
+                    if (paramAnnotation instanceof RequestParam) {
+                        String paramName = ((RequestParam) paramAnnotation).value();
+                        if (!"".equals(paramName.trim())) {
+                            String value = Arrays.toString(paramMap.get(paramName))
+                                    // 去掉中括号
+                                    .replaceAll("\\[|\\]", "")
+                                    // 去掉空白字符（等价于[\f\n\r\t\v]）
+                                    .replaceAll("\\s+", "");
+                            paramValues[i] = value;
+                        }
+                    }
+                }
+            }
+        }
+        // 调用映射方法
+        String beanName = toLowerFirstCase(method.getDeclaringClass().getSimpleName());
+        method.invoke(ioc.get(beanName), paramValues);
     }
 
     @Override
-    public void init(ServletConfig config) throws ServletException {
+    public void init(ServletConfig config) {
         // 1、加载application.properties配置文件
-        doLoadConfig(config.getInitParameter("contextConfigLocation"));
+        this.doLoadConfig(config.getInitParameter("contextConfigLocation"));
 
         // 2、扫描包下的所有类，将类的全限定名放入classNames集合列表
-        doScanner(contextConfig.getProperty("scan.package"));
+        this.doScanner(contextConfig.getProperty("scan.package"));
 
         //  ================== IOC（Inversion of Control，控制反转）部分 ==================
         /**
@@ -65,7 +129,7 @@ public class DispatcherServlet extends HttpServlet {
          * IOC：对对象控制权的转移，从程序代码本身反转到了外部容器。
          */
         // 3、初始化IOC容器，将组件注解类实例化并加入IoC容器
-        doInstance();
+        this.doInstance();
 
         // AOP（Aspect Oriented Programming，面向切面编程）
 
@@ -74,23 +138,55 @@ public class DispatcherServlet extends HttpServlet {
          * DI：对象之间依赖关系由容器在运行期决定。
          */
         // 4、完成依赖注入
-        doAutowired();
+        this.doAutowired();
 
         //  ================== MVC部分 ==================
         // 5、初始化HandlerMapping
-        //doInitHandlerMapping();
+        this.doInitHandlerMapping();
 
         System.out.println("Spring framework is init...");
+    }
+
+    /**
+     * 5、初始化HandlerMapping
+     */
+    private void doInitHandlerMapping() {
+        if (this.ioc.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, Object> entry : this.ioc.entrySet()) {
+            Class<?> clazz = entry.getValue().getClass();
+            if (!clazz.isAnnotationPresent(Controller.class)) {
+                continue;
+            }
+            // Controller类注解上的映射路径：@RequestMapping("/demo")
+            String baseUrl = "";
+            if (clazz.isAnnotationPresent(RequestMapping.class)) {
+                baseUrl = clazz.getAnnotation(RequestMapping.class).value();
+            }
+
+            for (Method method : clazz.getMethods()) {
+                // 方法注解的映射路径：@RequestMapping("/query")
+                if (!method.isAnnotationPresent(RequestMapping.class)) {
+                    continue;
+                }
+                // 解决RequestMapping参数不加/情况
+                String url = ("/" + baseUrl + "/" + method.getAnnotation(RequestMapping.class).value())
+                        .replaceAll("/+", "/");
+                handlerMapping.put(url, method);
+                System.out.println("Mapped: " + url + " => " + method);
+            }
+        }
     }
 
     /**
      * 4、完成依赖注入
      */
     private void doAutowired() {
-        if (ioc.isEmpty()) {
+        if (this.ioc.isEmpty()) {
             return;
         }
-        for (Map.Entry<String, Object> entry : ioc.entrySet()) {
+        for (Map.Entry<String, Object> entry : this.ioc.entrySet()) {
             Class<?> clazz = entry.getValue().getClass();
             // 把所有的包括private/protected/default/public 修饰字段都取出来
             Field[] fields = clazz.getDeclaredFields();
@@ -104,11 +200,12 @@ public class DispatcherServlet extends HttpServlet {
                     // field.getType() => com.ma.demo.service.DemoService
                     // field.getDeclaringClass() => com.ma.demo.controller.DemoController
                     // field.getClass() => java.lang.reflect.Field
-                    beanName = f.getType().getSimpleName();
+                    beanName = this.toLowerFirstCase(f.getType().getSimpleName());
                 }
+                // 暴力访问
                 f.setAccessible(true);
                 try {
-                    f.set(entry.getValue(), ioc.get(beanName));
+                    f.set(entry.getValue(), this.ioc.get(beanName));
                 } catch (IllegalAccessException e) {
                     e.printStackTrace();
                 }
@@ -121,11 +218,11 @@ public class DispatcherServlet extends HttpServlet {
      * 组件注解：@Component及其子注解@Service、@Controller、@Repository...
      */
     private void doInstance() {
-        if (classNames.isEmpty()) {
+        if (this.classNames.isEmpty()) {
             return;
         }
 
-        for (String className : classNames) {
+        for (String className : this.classNames) {
             try {
                 // 必须加<?>，否则clazz.getAnnotation()返回的是Annotation对象
                 Class<?> clazz = Class.forName(className);
@@ -134,27 +231,25 @@ public class DispatcherServlet extends HttpServlet {
                     // 默认类名首字母小写  注：clazz.getSimpleName()获取类名；clazz.getName()获取类的全限定名
                     String beanName = this.toLowerFirstCase(clazz.getSimpleName());
                     // key=>类名；value=>实例
-                    ioc.put(beanName, clazz.newInstance());
+                    this.ioc.put(beanName, clazz.newInstance());
                 } else if (clazz.isAnnotationPresent(Service.class)) {
                     // 获取@Service注解的value属性
                     Service service = clazz.getAnnotation(Service.class);
-                    System.out.println(service);
-                    System.out.println(service.annotationType());
                     // 1、自定义的beanName
                     String beanName = service.value();
 
                     // 2、默认类名首字母小写
                     if ("".equals(beanName.trim())) {
-                        beanName = toLowerFirstCase(clazz.getSimpleName());
+                        beanName = this.toLowerFirstCase(clazz.getSimpleName());
                     }
-                    ioc.put(beanName, clazz.newInstance());
+                    this.ioc.put(beanName, clazz.newInstance());
 
                     // 3、一个接口不允许有多个别名相同的实现类
                     for (Class<?> i : clazz.getInterfaces()) {
-                        if (ioc.containsKey(toLowerFirstCase(i.getSimpleName()))) {
+                        if (this.ioc.containsKey(this.toLowerFirstCase(i.getSimpleName()))) {
                             throw new Exception("The \"" + i.getName() + "\" is exists, please use alies");
                         }
-                        ioc.put(toLowerFirstCase(clazz.getSimpleName()), clazz.newInstance());
+                        this.ioc.put(this.toLowerFirstCase(i.getSimpleName()), clazz.newInstance());
                     }
                 } else {
                     continue;
@@ -184,7 +279,7 @@ public class DispatcherServlet extends HttpServlet {
                 // 全限定名 = 包名 + 类名
                 // replace第一个参数为字符串，replaceAll第一个参数为正则，故不需加转义。
                 String className = scanPackage + "." + file.getName().replace(".class", "");
-                classNames.add(className);
+                this.classNames.add(className);
             }
         }
     }

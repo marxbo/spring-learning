@@ -23,7 +23,7 @@ public class DemoController {
     @Autowired
     private DemoService demoService;
 
-    @RequestMapping("/query")
+    @RequestMapping("/query.do")
     public void query(HttpServletRequest request, HttpServletResponse response,
                       @RequestParam("name") String name){
         String result = demoService.get(name);
@@ -35,7 +35,7 @@ public class DemoController {
         }
     }
 
-    @RequestMapping("/add")
+    @RequestMapping("/add.do")
     public void add(HttpServletRequest request, HttpServletResponse response,
                     @RequestParam("a") Integer a, @RequestParam("b") Integer b){
         try {
@@ -45,7 +45,7 @@ public class DemoController {
         }
     }
 
-    @RequestMapping("/remove")
+    @RequestMapping("/remove.do")
     public void remove(HttpServletRequest request, HttpServletResponse response,
                        @RequestParam("id") Integer id){
     }
