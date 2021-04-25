@@ -1,4 +1,4 @@
-package com.ma.mvcframework.v1.servlet;
+package com.ma.mvcframework.v2.servlet;
 
 import com.ma.mvcframework.annotation.*;
 
@@ -15,6 +15,8 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.URL;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 核心控制器
@@ -40,9 +42,9 @@ public class DispatcherServlet extends HttpServlet {
     private Map<String, Object> ioc = new HashMap<>();
 
     /**
-     * URL和Method的映射关系
+     * 为什么不用Map？答：用Map的话key只能是URL，Handler本身功能就是URL和Method对应关系，已经具备Map的功能。
      */
-    private Map<String, Method> handlerMapping = new HashMap<>();
+    private List<Handler> handlerMapping = new ArrayList<>();
 
     @Override
     protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
@@ -67,54 +69,90 @@ public class DispatcherServlet extends HttpServlet {
      * @param resp 响应
      */
     private void doDispatch(HttpServletRequest req, HttpServletResponse resp) throws Exception {
+        Handler handler = this.getHandler(req);
+        if (handler == null) {
+        //if (!this.handlerMapping.containsKey(url)) {
+            resp.getWriter().write("404 Not Found!!");
+            return;
+        }
+
+        // 形参列表
+        Class<?>[] paramTypes = handler.getParamTypes();
+        // 实参列表
+        Object[] paramValues = new Object[paramTypes.length];
+        // 传参列表
+        Map<String, String[]> paramMap = req.getParameterMap();
+
+        // 匹配方法的参数，填充传递的参数
+        for (Map.Entry<String, Integer> entry : handler.paramIndexMapping.entrySet()) {
+            if (!paramMap.containsKey(entry.getKey())) {
+                continue;
+            }
+            String value = Arrays.toString(paramMap.get(entry.getKey()))
+                    // 去掉中括号
+                    .replaceAll("\\[|\\]", "")
+                    // 去掉空白字符（等价于[\f\n\r\t\v]）
+                    .replaceAll("\\s+", "");
+            Integer paramIndex = entry.getValue();
+            paramValues[paramIndex] = this.convert(paramTypes[paramIndex], value);
+        }
+
+        // 设置request和response参数
+        if (handler.paramIndexMapping.containsKey(HttpServletRequest.class.getSimpleName())) {
+            Integer index = handler.paramIndexMapping.get(HttpServletRequest.class.getSimpleName());
+            paramValues[index] = req;
+        }
+        if (handler.paramIndexMapping.containsKey(HttpServletResponse.class.getSimpleName())) {
+            Integer index = handler.paramIndexMapping.get(HttpServletResponse.class.getSimpleName());
+            paramValues[index] = resp;
+        }
+
+        // 调用映射方法
+        Object returnValue = handler.method.invoke(handler.controller, paramValues);
+        if (returnValue == null || returnValue instanceof Void) {
+            return;
+        }
+        resp.getWriter().write(returnValue.toString());
+    }
+
+    /**
+     * 根据请求路径匹配请求处理器
+     *
+     * @param req 请求
+     * @return 请求处理器
+     */
+    private Handler getHandler(HttpServletRequest req) {
         // 绝对路径
         String url = req.getRequestURI();
         // 去掉上下文的相对路径
         String contextPath = req.getContextPath();
         url = url.replaceAll(contextPath, "").replaceAll("/+", "/");
 
-        if (!this.handlerMapping.containsKey(url)) {
-            resp.getWriter().write("404 Not Found!!");
-            return;
-        }
-        Method method = this.handlerMapping.get(url);
-
-        // 形参列表
-        Class<?>[] paramTypes = method.getParameterTypes();
-        // 实参列表
-        Object[] paramValues = new Object[paramTypes.length];
-        // 传参列表
-        Map<String, String[]> paramMap = req.getParameterMap();
-        // 形参注解（一个参数可以有多个注解）
-        Annotation[][] pas = method.getParameterAnnotations();
-        for (int i = 0; i < paramTypes.length; i++) {
-            Class<?> clazz = paramTypes[i];
-            // 判断Class类对象是否相同用==
-            if (clazz == HttpServletRequest.class) {
-                paramValues[i] = req;
-            } else if (clazz == HttpServletResponse.class) {
-                paramValues[i] = resp;
-            } else if (clazz == String.class) {
-                for (Annotation paramAnnotation : pas[i]) {
-                    // 判断注解类型是否为@RequestParam的2种方法
-                    // RequestParam.class.isInstance(paramAnnotation) {
-                    if (paramAnnotation instanceof RequestParam) {
-                        String paramName = ((RequestParam) paramAnnotation).value();
-                        if (!"".equals(paramName.trim())) {
-                            String value = Arrays.toString(paramMap.get(paramName))
-                                    // 去掉中括号
-                                    .replaceAll("\\[|\\]", "")
-                                    // 去掉空白字符（等价于[\f\n\r\t\v]）
-                                    .replaceAll("\\s+", "");
-                            paramValues[i] = value;
-                        }
-                    }
-                }
+        // 匹配请求处理器
+        for (Handler handler : this.handlerMapping) {
+            Matcher matcher = handler.getPattern().matcher(url);
+            if (!matcher.matches()) {
+                continue;
             }
+            return handler;
         }
-        // 调用映射方法
-        String beanName = toLowerFirstCase(method.getDeclaringClass().getSimpleName());
-        method.invoke(ioc.get(beanName), paramValues);
+        return null;
+    }
+
+    /**
+     * 类型转化
+     *
+     * @param type 类型
+     * @param value 转化前的值
+     * @return 转化后的值
+     */
+    private Object convert(Class<?> type, String value) {
+        if (Integer.class == type) {
+            return Integer.valueOf(value);
+        } else if (Double.class == type) {
+            return Double.valueOf(value);
+        }
+        return value;
     }
 
     @Override
@@ -174,10 +212,12 @@ public class DispatcherServlet extends HttpServlet {
                     continue;
                 }
                 // 解决RequestMapping参数不加/情况
-                String url = ("/" + baseUrl + "/" + method.getAnnotation(RequestMapping.class).value())
+                String regex = ("/" + baseUrl + "/" + method.getAnnotation(RequestMapping.class).value())
                         .replaceAll("/+", "/");
-                this.handlerMapping.put(url, method);
-                System.out.println("Mapped: " + url + " => " + method);
+                Pattern pattern = Pattern.compile(regex);
+                // this.handlerMapping.put(url, method);
+                this.handlerMapping.add(new Handler(pattern, entry.getValue(), method));
+                System.out.println("Mapped: " + pattern + " => " + method);
             }
         }
     }
@@ -330,6 +370,85 @@ public class DispatcherServlet extends HttpServlet {
         char[] charArray = simpleName.toCharArray();
         charArray[0] += 32;
         return new String(charArray);
+    }
+
+
+    /**
+     * 请求处理器：记录Controller中的RequestMapping和Method的对应关系
+     */
+    public class Handler {
+        /**  */
+        private Pattern pattern;
+        /** 控制器单例对象 */
+        private Object controller;
+        /** 映射方法 */
+        private Method method;
+        /** 形参类型列表 */
+        private Class<?>[] paramTypes;
+
+        public Pattern getPattern() {
+            return pattern;
+        }
+
+        public Method getMethod() {
+            return method;
+        }
+
+        public Object getController() {
+            return controller;
+        }
+
+        public Class<?>[] getParamTypes() {
+            return paramTypes;
+        }
+
+        /**
+         * 形参列表：key-形参名，value-参数索引
+         */
+        private Map<String,Integer> paramIndexMapping;
+
+        public Handler(Pattern pattern, Object controller, Method method) {
+            this.pattern = pattern;
+            this.controller = controller;
+            this.method = method;
+
+            paramTypes = method.getParameterTypes();
+
+            paramIndexMapping = new HashMap<>();
+            putParamIndexMapping(method);
+        }
+
+        /**
+         * 形参列表映射
+         *
+         * @param method
+         */
+        private void putParamIndexMapping(Method method) {
+            // 形参注解（一个参数可以有多个注解）
+            Annotation[][] pas = method.getParameterAnnotations();
+            for (int i = 0; i < paramTypes.length; i++) {
+                for (Annotation paramAnnotation : pas[i]) {
+                    // 判断注解类型是否为@RequestParam的2种方法
+                    // RequestParam.class.isInstance(paramAnnotation) {
+                    if (paramAnnotation instanceof RequestParam) {
+                        String paramName = ((RequestParam) paramAnnotation).value();
+                        if (!"".equals(paramName.trim())) {
+                            paramIndexMapping.put(paramName, i);
+                        }
+                    }
+                }
+            }
+
+            // 提取方法参数中的request和response参数
+            for (int i = 0; i < this.paramTypes.length; i++) {
+                Class<?> paramType = paramTypes[i];
+                if (paramType == HttpServletRequest.class
+                    || paramType == HttpServletResponse.class) {
+                    paramIndexMapping.put(paramType.getSimpleName(), i);
+                }
+            }
+        }
+
     }
 
 }
