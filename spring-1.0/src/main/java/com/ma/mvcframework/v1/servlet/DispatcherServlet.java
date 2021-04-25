@@ -52,7 +52,7 @@ public class DispatcherServlet extends HttpServlet {
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         try {
-            // 6、调用、运行阶段（委派模式）
+            // 6、请求委派（委派模式）
             this.doDispatch(req,resp);
         } catch (Exception e) {
             e.printStackTrace();
@@ -61,7 +61,7 @@ public class DispatcherServlet extends HttpServlet {
     }
 
     /**
-     * 6、调用、运行阶段
+     * 6、请求委派（委派模式）
      *
      * @param req 请求
      * @param resp 响应
@@ -95,6 +95,8 @@ public class DispatcherServlet extends HttpServlet {
                 paramValues[i] = resp;
             } else if (clazz == String.class) {
                 for (Annotation paramAnnotation : pas[i]) {
+                    // 判断注解类型是否为@RequestParam的2种方法
+                    // RequestParam.class.isInstance(paramAnnotation) {
                     if (paramAnnotation instanceof RequestParam) {
                         String paramName = ((RequestParam) paramAnnotation).value();
                         if (!"".equals(paramName.trim())) {
