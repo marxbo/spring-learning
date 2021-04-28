@@ -1,10 +1,10 @@
 package com.ma.demo.controller;
 
 import com.ma.demo.service.DemoService;
-import com.ma.mvcframework.annotation.Autowired;
-import com.ma.mvcframework.annotation.Controller;
-import com.ma.mvcframework.annotation.RequestMapping;
-import com.ma.mvcframework.annotation.RequestParam;
+import com.ma.spring.framework.annotation.Autowired;
+import com.ma.spring.framework.annotation.Controller;
+import com.ma.spring.framework.annotation.RequestMapping;
+import com.ma.spring.framework.annotation.RequestParam;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;

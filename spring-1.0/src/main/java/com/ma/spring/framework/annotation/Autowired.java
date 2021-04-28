@@ -1,4 +1,4 @@
-package com.ma.mvcframework.annotation;
+package com.ma.spring.framework.annotation;
 
 import java.lang.annotation.*;
 

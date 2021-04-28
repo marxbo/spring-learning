@@ -1,17 +1,17 @@
-package com.ma.mvcframework.annotation;
+package com.ma.spring.framework.annotation;
 
 import java.lang.annotation.*;
 
 /**
- * 控制层注解
+ * 服务层注解
  *
  * @author ma
- * @date 2020/3/21 0:52
+ * @date 2020/3/21 0:54
  */
 @Target({ElementType.TYPE})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
-public @interface Controller {
+public @interface Service {
 
     String value() default "";
 

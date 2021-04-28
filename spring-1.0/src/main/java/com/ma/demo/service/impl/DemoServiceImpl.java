@@ -1,7 +1,7 @@
 package com.ma.demo.service.impl;
 
 import com.ma.demo.service.DemoService;
-import com.ma.mvcframework.annotation.Service;
+import com.ma.spring.framework.annotation.Service;
 
 /**
  * Service实现类
